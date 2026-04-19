@@ -29,7 +29,7 @@ You must obtain authorization keys to interact with Telegram as an application.
 Clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/yourusername/telegram-video-downloader.git
+git clone https://github.com/lockezhan/Telegram-Video-Download.git
 cd telegram-video-downloader
 
 # Install the required library
