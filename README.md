@@ -1,151 +1,113 @@
 # Telegram Video & Media Downloader
 
-A practical Telegram media downloader built with `telethon`, focused on downloading by direct post links (`t.me/...`).
+A high-performance Telegram media downloader built with `telethon`, featuring parallel chunk downloading for maximum speed.
 
 ## Features ✨
 
-* **Link-first workflow:** download by specific post links quickly.
-* **Minimal entry script:** `run_links.sh` for one-command usage.
-* **Album support:** auto-detect grouped media and download all items.
-* **Smart resume:** skip already-downloaded media automatically.
-* **Caption export:** saves `post_text.txt` per post folder.
-* **Web gallery generator:** `generate_ui.py` creates `index.html` for browsing.
+*   **FastDownload Engine (Parallel Chunking):** Specifically optimized for non-premium accounts to bypass single-connection speed limits via multi-threaded chunking.
+*   **Clean Terminal UI:** Integrated with `tqdm` for beautiful, non-flickering concurrent progress bars.
+*   **Automatic Bottleneck Detection:** Notifies you if `cryptg` is missing or if your account status (Premium/Non-Premium) is affecting speeds.
+*   **Album support:** Auto-detect grouped media and download all items.
+*   **Smart resume:** Skip already-downloaded media automatically.
+*   **Caption export:** Saves `post_text.txt` per post folder.
+*   **Web gallery generator:** `generate_ui.py` creates `index.html` for browsing.
 
 ## Prerequisites 🛠
 
 Before you begin, you need:
-1. **Python 3.7+** installed on your system.
+1. **Python 3.8+**
 2. An active **Telegram Account**.
 
 ## 🚀 Getting Started
 
 ### 1. Gather your API Data
-You must obtain authorization keys to interact with Telegram as an application.
-1. Log into your Telegram core account: [https://my.telegram.org/](https://my.telegram.org/)
+1. Log into your Telegram account: [https://my.telegram.org/](https://my.telegram.org/)
 2. Go to **"API development tools"**.
-3. Create a new App (the details like app name don't matter much) and copy the **`App api_id`** and **`App api_hash`**.
+3. Create a new App and copy the **`api_id`** and **`api_hash`**.
 
 ### 2. Download and Setup
 Clone the repository and install dependencies:
 
 ```bash
 git clone https://github.com/lockezhan/Telegram-Video-Download.git
-cd telegram-video-downloader
+cd Telegram-Video-Download
 
-# Install the required library
-pip3 install telethon
+# Install requirements
+pip3 install telethon tqdm cryptg
 ```
 
 ### 3. Configure the Script
-Open `tg_video_downloader.py` and set your credentials in the `SETTINGS` block:
+Open `tg_video_downloader.py` and set your credentials:
 
 ```python
 # ================= SETTINGS =================
+API_ID = 1234567               
+API_HASH = 'your_api_hash'     
+PHONE = '+1234567890'          
 
-API_ID = 1234567               # Replace 1234567 with your Integer App api_id
-API_HASH = 'your_api_hash'     # Replace with your App api_hash string
-PHONE = '+1234567890'          # Replace with your international phone number
-
-MODE = 'specific'              # recommended for link-first workflow
-CHANNEL_ID = int('-100123456789') # Replace with your Target Channel ID.
-# ...
+# Speed & UI Settings
+DOWNLOAD_CONCURRENCY = 4       # Concurrent files
+FAST_DOWNLOAD_ENABLED = True   # Multi-chunk downloading (Highly Recommended)
+FAST_DOWNLOAD_WORKERS = 4      # Workers per file
+SHOW_LIVE_PROGRESS = True      # Clean tqdm bars
 ```
 
-#### How to find your Private Channel ID:
-If the URL to a post is: `https://t.me/c/123049182/42`
-Your base ID sequence is `123049182`. To convert this to an API Channel ID, prefix it with `-100`. So it becomes `-100123049182`.
+### 4. Performance Tips ⚡
 
-### 4. Use the Minimal Link Entry (Recommended)
+If you want the absolute best speeds:
+1. **Ensure `cryptg` is installed:** This provides hardware acceleration for Telegram's encryption.
+2. **Enable `FAST_DOWNLOAD_ENABLED`:** This is the key to bypassing the ~1MB/s limit on non-premium accounts.
+3. **Connection Count:** `DOWNLOAD_CONCURRENCY * FAST_DOWNLOAD_WORKERS` defines your total active TCP connections. Keep total connections around 16-32 for optimal stability.
 
-Use the standalone launcher:
+## Usage Guide 📖
 
-```bash
-cd TG-channel-dowloader
-./run_links.sh "https://t.me/channel_name/1234"
-```
-
-Multiple links:
-
-```bash
-./run_links.sh "https://t.me/a/1" "https://t.me/b/2"
-```
-
-From file (one link per line):
-
-```bash
-./run_links.sh -f links.txt
-```
-
-### 5. Alternative Run Modes
-
-Run core script directly:
-
+### Option 1: Direct Download (Standard)
+Configure the `POST_URLS` or `MODE` inside `tg_video_downloader.py`, then run:
 ```bash
 python3 tg_video_downloader.py
 ```
 
-Run standalone Python link entry directly:
+### Option 2: Flexible Link Entry (Recommended 🚀)
+Use the `run_links.sh` wrapper (or `download_by_links.py` directly) to pass links without editing variables:
 
+**1. Command Line Links:**
 ```bash
-python3 download_by_links.py "https://t.me/channel_name/1234"
+./run_links.sh "https://t.me/channel_name/101" "https://t.me/channel_name/102"
 ```
 
-* **First Time Run:** The terminal will prompt you to enter a Telegram Login Code (sent to your Telegram App via the main Telegram service chat account). Type it in and hit enter. 
-* A `telegram_session.session` file will be generated in your folder. Keep this safe, as it prevents you from having to log in again.
+**2. From a Text File:**
+Create a `links.txt` with one URL per line, then run:
+```bash
+./run_links.sh -f links.txt
+```
 
-### 6. Check out your files!
-By default, the script will create a folder called `telegram_videos` where all fetched posts will be organized neatly into named sub-directories. 
+**3. Interactive Mode:**
+Just run the script, and it will prompt you to paste links:
+```bash
+./run_links.sh
+```
 
-### 7. Generate a Web Gallery (Optional) 🖥️
-To comfortably view all the downloaded media in your browser instead of digging through folders, we've included a UI generator script.
-Simply run:
+---
+
+*   **First Time Run:** The terminal will prompt you to enter a Telegram Login Code.
+*   **Session Management:** A `telegram_session.session` file will be generated. Keep this safe to avoid re-logging.
+
+### Generate a Web Gallery (Optional) 🖥️
+To view your downloads in a beautiful web dashboard:
 ```bash
 python3 generate_ui.py
 ```
-This will scan your `telegram_videos` folder and instantly create an `index.html` file. Open `index.html` in any web browser to enjoy a beautiful, responsive dashboard to view all your posts, read captions, and watch videos seamlessly!
-
-## GitHub Upload Checklist ✅
-
-Before pushing publicly:
-
-1. Replace real credentials in `tg_video_downloader.py`:
-    - `API_ID`
-    - `API_HASH`
-    - `PHONE`
-2. Keep session/media artifacts untracked (already covered in `.gitignore`):
-    - `telegram_session.session*`
-    - `telegram_videos/`
-    - `index.html`
-3. If any sensitive files were already tracked, untrack them once:
-
-```bash
-git rm --cached telegram_session.session telegram_session.session-journal 2>/dev/null || true
-git rm -r --cached telegram_videos 2>/dev/null || true
-git rm --cached index.html 2>/dev/null || true
-```
-
-## Folder Structure Example
-```
-telegram_videos/
-├── Amazing Python tutorial video... (ID 142)/
-│   ├── video_142.mp4
-│   ├── thumb_142.jpg
-│   └── post_text.txt
-└── Great photo array from... (ID 188)/
-    ├── photo_188.jpg
-    ├── photo_189.jpg
-    └── post_text.txt
-```
+Open `index.html` in your browser.
 
 ## Authors & Credits 👨‍💻
 
-* **cyberg1psy* - Idea, architecture, and testing.
-* **Claude 3 Opus** - AI Assistant.
-* **Gemini (Antigravity)** - AI Assistant.
+*   Original Idea: [telegram-channel-dowloader](https://github.com/cyberg1psy/telegram-channel-dowloader.git)
+*   Optimization & UI: Antigravity AI
+*   New Engine: FastTelethon-style parallel chunking implementation.
 
 ## License 📜
 
-This project is licensed under the [MIT License](LICENSE) - see the LICENSE file for details.
+This project is licensed under the [MIT License](LICENSE).
 
 ---
-*Disclaimer: Make sure you have the rights to download and distribute the content you are scraping. This tool is provided for personal backup and educational purposes only.*
+*Disclaimer: This tool is provided for personal backup and educational purposes only. Respect Telegram's TOS.*

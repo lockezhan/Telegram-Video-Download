@@ -1,8 +1,25 @@
+# original imports
 import os
 import asyncio
 import re
+import time
+import sys
+import math
 from telethon import TelegramClient
-from telethon.tl.types import MessageMediaDocument
+from telethon.tl.types import MessageMediaDocument, Document, Photo, InputDocumentFileLocation, InputPhotoFileLocation
+from telethon.tl.functions.upload import GetFileRequest
+
+try:
+    from tqdm.asyncio import tqdm
+except ImportError:
+    print("❌ Error: 'tqdm' is not installed. Please install it using 'pip install tqdm'.")
+    sys.exit(1)
+
+try:
+    import cryptg
+    HAS_CRYPTG = True
+except ImportError:
+    HAS_CRYPTG = False
 
 # ================= SETTINGS =================
 
@@ -10,11 +27,11 @@ from telethon.tl.types import MessageMediaDocument
 # Get these by logging into https://my.telegram.org/, 
 # navigating to "API development tools" and creating a new application.
 API_ID = 123456  # Replace with your API_ID (integer without quotes)
-API_HASH = 'xxxxxxxxxxxxxxxxx'  # Replace with your API_HASH (string inside quotes)
+API_HASH = 'xxxxxxxxxx'  # Replace with your API_HASH (string inside quotes)
 
 # 2. Telegram Phone Number
 # Your phone number in international format, including the plus sign.
-PHONE = '+12356789'  # Replace with your phone number
+PHONE = '+12345678'  # Replace with your phone number
 
 # 3. Mode of Operation
 # 'specific'  — download posts listed in POST_URLS
@@ -35,6 +52,22 @@ START_FROM_MSG_ID = 0
 POST_URLS = [
     'https://t.me/12134/4401',
 ]
+
+# 7. Concurrent Downloads
+# Increase this value carefully; Telegram/network stability is usually the limiting factor.
+DOWNLOAD_CONCURRENCY = 4
+
+# 8. Performance Tweaks
+# Set False to skip thumbnail fetch for videos (usually faster overall).
+DOWNLOAD_VIDEO_THUMBNAIL = False
+# Live progress in terminal using tqdm
+SHOW_LIVE_PROGRESS = True
+# Refresh interval when SHOW_LIVE_PROGRESS is enabled.
+PROGRESS_UPDATE_INTERVAL_SEC = 0.5
+# Enable Parallel Chunk Downloading (bypasses non-premium limits)
+FAST_DOWNLOAD_ENABLED = True
+# Number of concurrent workers per file for parallel chunking
+FAST_DOWNLOAD_WORKERS = 4
 
 # Directory where files will be saved
 DOWNLOAD_DIR = 'telegram_videos'
@@ -85,8 +118,83 @@ def has_media_to_download(message):
             return True
     return False
 
+def get_input_file_location(message):
+    """Extracts InputFileLocation and Size from a message for MTProto GetFileRequest."""
+    if message.document:
+        doc = message.document
+        return InputDocumentFileLocation(
+            id=doc.id,
+            access_hash=doc.access_hash,
+            file_reference=doc.file_reference,
+            thumb_size=''
+        ), doc.size
+    elif message.photo:
+        photo = message.photo
+        # Get largest size
+        largest = max(photo.sizes, key=lambda s: s.size if hasattr(s, 'size') else 0)
+        return InputPhotoFileLocation(
+            id=photo.id,
+            access_hash=photo.access_hash,
+            file_reference=photo.file_reference,
+            thumb_size=largest.type
+        ), largest.size if hasattr(largest, 'size') else 0
+    return None, 0
 
-async def download_video(m, client, post_dir, idx, total, downloaded_ids):
+async def fast_download_file(client, location, file_size, out_file, progress_callback=None, workers=4):
+    """Parallel Chunk Downloader using multiple workers per file."""
+    chunk_size = 1024 * 1024  # 1MB chunk size
+    chunks = math.ceil(file_size / chunk_size)
+    queue = asyncio.Queue()
+    for i in range(chunks):
+        queue.put_nowait((i, i * chunk_size))
+
+    # Pre-allocate file
+    with open(out_file, 'wb') as f:
+        if file_size > 0:
+            f.seek(file_size - 1)
+            f.write(b'\0')
+
+    lock = asyncio.Lock()
+    downloaded = 0
+
+    async def worker():
+        nonlocal downloaded
+        while not queue.empty():
+            try:
+                i, offset = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            # Add retry mechanism for each chunk
+            for attempt in range(3):
+                try:
+                    req = GetFileRequest(
+                        location=location,
+                        offset=offset,
+                        limit=chunk_size
+                    )
+                    result = await client(req)
+                    
+                    async with lock:
+                        with open(out_file, 'rb+') as f:
+                            f.seek(offset)
+                            f.write(result.bytes)
+                        downloaded += len(result.bytes)
+                        if progress_callback:
+                            progress_callback(downloaded, file_size)
+                    break
+                except Exception as e:
+                    if attempt == 2:
+                        raise e
+                    await asyncio.sleep(1)
+            
+            queue.task_done()
+
+    worker_tasks = [asyncio.create_task(worker()) for _ in range(workers)]
+    await asyncio.gather(*worker_tasks)
+
+
+async def download_video(m, client, post_dir, idx, total, downloaded_ids, semaphore):
     """Downloads media (video or photo) and its thumbnail."""
     is_vid = is_video(m) or m.video
     is_pic = m.photo
@@ -98,46 +206,79 @@ async def download_video(m, client, post_dir, idx, total, downloaded_ids):
 
     file_path = os.path.join(post_dir, file_name)
     
-    print(f"  [{idx}/{total}] 处理文件: {file_name}")
-    print(f"      类型: {'视频' if is_vid and not is_pic else '图片' if is_pic else '未知'}")
-
     # Attempt to grab the thumbnail first if it's a video
-    if is_vid and not is_pic:
+    if DOWNLOAD_VIDEO_THUMBNAIL and is_vid and not is_pic:
         try:
             thumb_path = os.path.join(post_dir, f"thumb_{m.id}.jpg")
             if not os.path.exists(thumb_path):
-                await client.download_media(m, thumb=-1, file=thumb_path)
+                async with semaphore:
+                    await client.download_media(m, thumb=-1, file=thumb_path)
         except Exception as e:
-            print(f"      ⚠️  缩略图下载失败: {e}")
+            tqdm.write(f"      ⚠️  缩略图下载失败: {e}")
 
     if m.id in downloaded_ids:
-        print(f"  [{idx}/{total}] ⏭️  {file_name} — 已下载，跳过")
         return False
 
     if os.path.exists(file_path):
-        print(f"  [{idx}/{total}] ⏭️  {file_name} — 本地已存在，跳过")
         downloaded_ids.add(m.id)
         return False
 
-    print(f"  [{idx}/{total}] ⬇️  开始下载 {file_name}...")
+    progress_callback = None
+    if SHOW_LIVE_PROGRESS:
+        last_update = 0.0
+        bar = tqdm(
+            desc=file_name[:20],
+            total=0,
+            unit='B',
+            unit_scale=True,
+            unit_divisor=1024,
+            leave=False,
+            position=idx % max(1, DOWNLOAD_CONCURRENCY)
+        )
 
-    def progress(current, total_bytes):
-        percent = current * 100 / total_bytes if total_bytes else 0
-        bar_len = 24
-        filled = int(bar_len * percent / 100)
-        bar = '█' * filled + '░' * (bar_len - filled)
-        current_mb = current / (1024 * 1024)
-        total_mb = total_bytes / (1024 * 1024) if total_bytes else 0
-        print(f"    [{bar}] {percent:6.2f}%  {current_mb:8.2f}MB/{total_mb:8.2f}MB", end='\r')
+        def progress(current, total_bytes):
+            nonlocal last_update
+            
+            if bar.total == 0 and total_bytes:
+                bar.total = total_bytes
+                
+            now = time.monotonic()
+            is_finished = bool(total_bytes) and current >= total_bytes
+            
+            # small optimization so we don't spam terminal
+            if not is_finished and (now - last_update) < PROGRESS_UPDATE_INTERVAL_SEC:
+                return
+
+            last_update = now
+            bar.n = current
+            bar.refresh()
+
+        progress_callback = progress
 
     try:
-        await client.download_media(m, file=file_path, progress_callback=progress)
-        print()
+        async with semaphore:
+            if FAST_DOWNLOAD_ENABLED:
+                location, size = get_input_file_location(m)
+                if location and size:
+                    await fast_download_file(client, location, size, file_path, progress_callback=progress_callback, workers=FAST_DOWNLOAD_WORKERS)
+                else:
+                    # Fallback to standard if no location found
+                     await client.download_media(m, file=file_path, progress_callback=progress_callback)
+            else:
+                await client.download_media(m, file=file_path, progress_callback=progress_callback)
         downloaded_ids.add(m.id)
-        print(f"  ✅ 下载完成: {file_name}")
+        if SHOW_LIVE_PROGRESS:
+            bar.close()
+            tqdm.write(f"  ✅ 下载完成: {file_name}")
+        else:
+            print(f"  ✅ 下载完成: {file_name}")
         return True
     except Exception as e:
-        print(f"\n  ❌ 下载失败: {type(e).__name__}: {e}")
+        if SHOW_LIVE_PROGRESS:
+            bar.close()
+            tqdm.write(f"\n  ❌ 下载失败: {type(e).__name__}: {e}")
+        else:
+            print(f"\n  ❌ 下载失败: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -152,33 +293,25 @@ async def process_message(client, entity, message, downloaded_ids):
     post_text = message.text or ""
 
     if message.grouped_id:
-        print(f"🎬 Album detected (group ID: {message.grouped_id})")
         try:
-            # Search nearby messages to find the rest of the album parts
-            # Use a wider range and timeout to ensure we find all album items
             album_items = []
             async for m in client.iter_messages(entity, min_id=msg_id - 100, max_id=msg_id + 100, limit=100):
                 if m.grouped_id == message.grouped_id:
                     if has_media_to_download(m):
                         album_items.append(m)
-                    # Save the longest text piece just in case caption is attached to a different item
                     if m.text and len(m.text) > len(post_text):
                         post_text = m.text
             
             messages_to_download = sorted(album_items, key=lambda x: x.id)
-            print(f"   Found {len(messages_to_download)} media items in album")
         except Exception as e:
-            print(f"   ⚠️  Error scanning album: {e}")
-            # Fallback: at least download the current message if it has media
             if has_media_to_download(message):
                 messages_to_download.append(message)
     else:
-        print(f"📄 Single message (not an album)")
         if has_media_to_download(message):
             messages_to_download.append(message)
 
     if not messages_to_download:
-        print("⚠️  No downloadable media found.")
+        tqdm.write("⚠️  No downloadable media found.")
         return 0
 
     # Create folder for saving
@@ -186,7 +319,7 @@ async def process_message(client, entity, message, downloaded_ids):
     post_folder_name = f"{folder_prefix} (ID {msg_id})"
     post_dir = os.path.join(DOWNLOAD_DIR, post_folder_name)
     os.makedirs(post_dir, exist_ok=True)
-    print(f"📁 Saving to: {post_dir}")
+    tqdm.write(f"📁 Saving to: {post_dir}")
 
     # Save original caption
     if post_text:
@@ -196,8 +329,16 @@ async def process_message(client, entity, message, downloaded_ids):
     # Iterate and download media files
     downloaded_count = 0
     total = len(messages_to_download)
-    for idx, m in enumerate(messages_to_download, 1):
-        ok = await download_video(m, client, post_dir, idx, total, downloaded_ids)
+    semaphore = asyncio.Semaphore(max(1, DOWNLOAD_CONCURRENCY))
+
+    tasks = [
+        asyncio.create_task(
+            download_video(m, client, post_dir, idx, total, downloaded_ids, semaphore)
+        )
+        for idx, m in enumerate(messages_to_download, 1)
+    ]
+
+    for ok in await asyncio.gather(*tasks):
         if ok:
             downloaded_count += 1
 
@@ -241,22 +382,7 @@ async def run_specific(client, downloaded_ids):
             if not message:
                 print("❌ Target message not found.")
                 continue
-            print(f"📨 Message found (ID: {message.id})")
-            print(f"   Has media: {message.media is not None}")
-            print(f"   Has photo: {message.photo}")
-            print(f"   Has video: {message.video}")
-            print(f"   Has text: {bool(message.text)}")
-            if message.media:
-                print(f"   Media type: {type(message.media).__name__}")
-                # Check for access restrictions
-                if message.restriction_reason:
-                    print(f"\n⚠️  ACCESS RESTRICTION DETECTED:")
-                    for reason in message.restriction_reason:
-                        print(f"   Platform: {reason.platform}")
-                        print(f"   Reason: {reason.reason}")
-                        print(f"   Message: {reason.text}")
-                    print("   Note: this is Telegram metadata (often for official app stores).")
-                    print("   Downloader will still attempt to fetch media.")
+            print(f"📨 Target acquired (ID: {message.id}) - Media processing...")
         except Exception as e:
             print(f"❌ Error fetching message: {e}")
             import traceback
@@ -336,7 +462,26 @@ async def main():
     # Telethon will automatically prompt for the authentication code 
     # if no valid session file is found.
     await client.start(phone=PHONE)
-    print("✅ Authorization successful!\n")
+    
+    me = await client.get_me()
+    print(f"✅ Authorization successful! User logged in: {me.username or me.first_name}")
+
+    if not getattr(me, 'premium', False):
+        print("\n⚠️  NOTICE: This account does NOT have Telegram Premium.")
+        print("   Telegram permanently caps download speeds (~1-2MB/s) for non-premium accounts.")
+        print("   Speed limits will heavily dictate download performance regardless of concurrency.")
+    else:
+        print("\n💎 Telegram Premium account detected! Download speeds should be fully unlocked.")
+
+    if not HAS_CRYPTG:
+        print("\n⚠️  CRITICAL WARNING: 'cryptg' library is missing in your environment.")
+        print("   Telethon standard decryption in Python is very slow. This is a massive bottleneck!")
+        print("   To massively boost download speed, please run: pip install cryptg")
+        print("   You may need build essentials (gcc, etc).")
+    else:
+        print("\n✅ 'cryptg' is installed -> Quickest decryption method is enabled.")
+
+    print("")
 
     if MODE == 'specific':
         print("📋 Active Mode: Specific URLs Mode")
