@@ -18,7 +18,7 @@ def normalize_links(raw_links):
             continue
 
         if not re.search(r"t\.me/(?:c/)?[^/]+/\d+", link):
-            print(f"⚠️  跳过无效链接: {link}")
+            print(f"⚠️  skip invalid link: {link}")
             continue
 
         if link not in seen:
@@ -42,11 +42,11 @@ def collect_links(args):
                     if line:
                         links.append(line)
         except Exception as exc:
-            print(f"❌ 读取链接文件失败: {exc}")
+            print(f"❌ read link file error: {exc}")
             sys.exit(1)
 
     if not links and not args.no_prompt:
-        print("请输入帖子链接（每行一个，输入空行结束）:")
+        print("please input links(one per line, empty line to end):")
         while True:
             line = input().strip()
             if not line:
@@ -56,8 +56,8 @@ def collect_links(args):
     links = normalize_links(links)
 
     if not links:
-        print("❌ 没有可用的 Telegram 帖子链接。")
-        print("示例: https://t.me/channel_name/1234")
+        print("❌ No valid Telegram post links found.")
+        print("Example: https://t.me/channel_name/1234")
         sys.exit(1)
 
     return links
@@ -65,22 +65,22 @@ def collect_links(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Telegram 指定帖子链接下载器（独立入口）"
+        description="Telegram specific post links downloader"
     )
     parser.add_argument(
         "links",
         nargs="*",
-        help="帖子链接，可传多个，例如: https://t.me/xxx/1 https://t.me/xxx/2",
+        help="post links, e.g.: https://t.me/xxx/1 https://t.me/xxx/2",
     )
     parser.add_argument(
         "-f",
         "--file",
-        help="从文本文件读取链接（每行一个）",
+        help="read links from file(one per line)",
     )
     parser.add_argument(
         "--no-prompt",
         action="store_true",
-        help="未传 links/file 时不进入交互输入，直接报错退出",
+        help="without links/file, no interactive input, exit directly",
     )
     return parser.parse_args()
 
@@ -93,8 +93,8 @@ def main():
     core.POST_URLS = links
 
     print("=" * 60)
-    print("🚀 独立入口启动：指定链接下载模式")
-    print(f"🔗 本次链接数量: {len(links)}")
+    print("🚀 Specific links download mode")
+    print(f"🔗 Number of links: {len(links)}")
     for index, link in enumerate(links, 1):
         print(f"  {index}. {link}")
     print("=" * 60)

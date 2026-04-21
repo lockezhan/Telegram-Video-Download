@@ -9,6 +9,10 @@ from telethon import TelegramClient
 from telethon.tl.types import MessageMediaDocument, Document, Photo, InputDocumentFileLocation, InputPhotoFileLocation
 from telethon.tl.functions.upload import GetFileRequest
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module='telethon.client.auth')
+
+
 try:
     from tqdm.asyncio import tqdm
 except ImportError:
@@ -468,18 +472,12 @@ async def main():
 
     if not getattr(me, 'premium', False):
         print("\n⚠️  NOTICE: This account does NOT have Telegram Premium.")
-        print("   Telegram permanently caps download speeds (~1-2MB/s) for non-premium accounts.")
-        print("   Speed limits will heavily dictate download performance regardless of concurrency.")
     else:
         print("\n💎 Telegram Premium account detected! Download speeds should be fully unlocked.")
 
     if not HAS_CRYPTG:
         print("\n⚠️  CRITICAL WARNING: 'cryptg' library is missing in your environment.")
-        print("   Telethon standard decryption in Python is very slow. This is a massive bottleneck!")
         print("   To massively boost download speed, please run: pip install cryptg")
-        print("   You may need build essentials (gcc, etc).")
-    else:
-        print("\n✅ 'cryptg' is installed -> Quickest decryption method is enabled.")
 
     print("")
 
