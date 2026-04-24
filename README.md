@@ -1,5 +1,7 @@
 # Telegram Video & Media Downloader
 
+> 🇨🇳 [中文文档请点击这里 / Chinese README](README_CN.md)
+
 A high-performance Telegram media downloader built with `telethon`, featuring parallel chunk downloading for maximum speed.
 
 ## Features ✨
