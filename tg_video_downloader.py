@@ -8,6 +8,7 @@ import math
 from telethon import TelegramClient
 from telethon.tl.types import MessageMediaDocument, Document, Photo, InputDocumentFileLocation, InputPhotoFileLocation
 from telethon.tl.functions.upload import GetFileRequest
+from telethon.errors import FileMigrateError
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='telethon.client.auth')
@@ -149,6 +150,20 @@ async def fast_download_file(client, location, file_size, out_file, progress_cal
     chunk_size = 1024 * 1024  # 1MB chunk size
     chunks = math.ceil(file_size / chunk_size)
     queue = asyncio.Queue()
+    # Check if we are on the correct DC, if not, switch the client
+    sender = client._sender
+    exported = False
+    try:
+        # Try a tiny request to trigger DC migration if needed
+        await client(GetFileRequest(location, offset=0, limit=4096))
+    except FileMigrateError as e:
+        # Transfer the client to the correct DC
+        sender = await client._borrow_exported_sender(e.new_dc)
+        exported = True
+    except Exception:
+        # Other errors will be handled in the workers
+        pass
+
     for i in range(chunks):
         queue.put_nowait((i, i * chunk_size))
 
@@ -177,7 +192,7 @@ async def fast_download_file(client, location, file_size, out_file, progress_cal
                         offset=offset,
                         limit=chunk_size
                     )
-                    result = await client(req)
+                    result = await client._call(sender, req)
                     
                     async with lock:
                         with open(out_file, 'rb+') as f:
@@ -195,7 +210,11 @@ async def fast_download_file(client, location, file_size, out_file, progress_cal
             queue.task_done()
 
     worker_tasks = [asyncio.create_task(worker()) for _ in range(workers)]
-    await asyncio.gather(*worker_tasks)
+    try:
+        await asyncio.gather(*worker_tasks)
+    finally:
+        if exported and sender:
+            await client._return_exported_sender(sender)
 
 
 async def download_video(m, client, post_dir, idx, total, downloaded_ids, semaphore):
