@@ -372,6 +372,8 @@ async def run_specific(client, downloaded_ids):
     """Mode: Specific Posts"""
     total_new = 0
 
+    from telethon.tl.functions.channels import GetFullChannelRequest
+
     for url in POST_URLS:
         print(f"\n{'='*55}")
         print(f"Targeting URL: {url}")
@@ -384,6 +386,9 @@ async def run_specific(client, downloaded_ids):
         channel_identifier = match.group(1)
         msg_id = int(match.group(2))
         
+        comment_match = re.search(r'[?&]comment=(\d+)', url)
+        comment_id = int(comment_match.group(1)) if comment_match else None
+
         # Determine the channel entity
         # For private channels: c/123456789 -> -100123456789
         # For public channels: @channel_name or channel_name
@@ -399,6 +404,20 @@ async def run_specific(client, downloaded_ids):
         except Exception as e:
             print(f"❌ Channel access error: {e}")
             continue
+
+        if comment_id:
+            try:
+                full_channel = await client(GetFullChannelRequest(channel=entity))
+                if full_channel.full_chat.linked_chat_id:
+                    entity = await client.get_entity(full_channel.full_chat.linked_chat_id)
+                    msg_id = comment_id
+                    print(f"✅ Found linked discussion group: {entity.title if hasattr(entity, 'title') else entity.username}")
+                else:
+                    print("❌ No linked discussion group found for this channel. Cannot fetch comment.")
+                    continue
+            except Exception as e:
+                print(f"❌ Error getting linked discussion group: {e}")
+                continue
 
         try:
             message = await client.get_messages(entity, ids=msg_id)
